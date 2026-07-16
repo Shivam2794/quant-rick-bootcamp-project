@@ -1,0 +1,37 @@
+# Ignore media and data files
+*.mp4
+*.parquet
+*.jsonl
+*.txt
+*.csv
+
+# Ignore video and chunk directories
+videos_v1/
+full_vids/
+full_vids_proper/
+extracted_chunks/
+extracted_chunks_all_versions/
+extracted_chunks_fixed/
+transcripts_v1/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore agent metadata and prompt logs
+*.metadata.json
+full_prompt*.txt
+user_prompt*.txt
+vid_*_raw.txt
+search_vid*.txt
+all_user_prompts.txt
+latest_user_prompt.txt
+fable_response.md
+fable_review.md
+debug.txt
+inspect_output.txt
+ps_out.txt
+search_results.txt
+user_inputs*.txt
+extracted_vids*.txt
+all_transcripts_wrapped.txt
