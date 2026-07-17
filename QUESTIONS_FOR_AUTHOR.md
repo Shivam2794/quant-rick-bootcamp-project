@@ -1,0 +1,16 @@
+# Questions for the Author
+
+Hi [Author's Name],
+
+I've successfully finished building and testing the engine from Bootcamp 2. By combining the Robert Carver framework (EWMAC, Breakout, Acceleration, Skew, Volatility Attenuation) with Cross-Sectional Momentum, and running it on a Crypto Panel (Targeting BTC), I successfully replicated and verified the **1.45 Sharpe Ratio** benchmark!
+
+However, during my experimentation, I applied this exact same engine configuration to other traditional asset panels (like US Equities targeting SPY/QQQ, and Treasuries targeting TLT) and noticed a significant drop-off in performance, often underperforming simple Buy & Hold. 
+
+I'd love to get your insights on adapting this framework to traditional macro assets:
+
+1. **Adapting Forecast Weights for Equities:** Given that US Equities have a persistent upward drift with sharp, V-shaped mean-reverting crashes, trend-following often gets whipsawed during recoveries. To hit a 1.45 Sharpe on QQQ/SPY, do you recommend radically altering the forecast weights (e.g., significantly increasing the weight on Skew to "buy the dip" and reducing EWMAC/Breakout weights)?
+2. **Cross-Sectional Momentum Limitations:** Cross-Sectional momentum worked beautifully on Crypto due to high dispersion and capital rotation. However, in equities, correlations often spike to 1 during market panics. Do you generally advise turning off Cross-Sectional momentum when trading broad equity indices, or is there a specific way you structure your equity panels to maintain dispersion?
+3. **Additional Defense Layers:** For assets like SPY, do we need to rely more heavily on external defensive toggles (like VIX term structure filters or the CPPI models from earlier in the course) rather than just the Carver Volatility Attenuation?
+4. **Parameter Optimization (Lookbacks):** Do you find that traditional assets require vastly different lookback windows (e.g., much slower moving averages) compared to the hyper-fast regime changes in Crypto?
+
+Looking forward to your thoughts!
