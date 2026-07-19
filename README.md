@@ -1,10 +1,23 @@
 # Systematic Trading Engine: The 1.45 Sharpe Crypto Replication
 
-This repository contains a comprehensive, clean-room implementation of the **Carver Systematic Trading Engine** taught in Bootcamp 2. 
+This repository contains a comprehensive, clean-room implementation of the **Carver Systematic Trading Engine** taught in Bootcamp 2, split into a **Dual-Core Architecture**:
+1. **The Crypto Core:** A 1.45+ Sharpe ratio Spot-Crypto replication (found in the root).
+2. **The OCURE-5 Dynamic Equity Core:** A strictly `long_only`, dynamically rotating 20-stock tech basket yielding 21.6% CAGR (found in the `OCURE-5-Dynamic-Equity` folder).
 
 The primary objective of this codebase was to mathematically verify and replicate the elusive **1.45 Sharpe Ratio** benchmark target without relying on black-box libraries, and without introducing lookahead bias.
 
-By applying the 8-Layer Robert Carver ruleset combined with Cross-Sectional Momentum across a diversified panel of Cryptocurrencies, this engine successfully hits the **1.50 Sharpe Ratio** mark (out of sample, net of transaction fees, with realistic execution lag).
+---
+
+## 🚀 NEW: OCURE-5 Dynamic Equity Engine (21.6% CAGR)
+Following challenges adapting the base Carver framework to assets with structural upward drift (Equities), I built a standalone **Dynamic Equity Engine** (`/OCURE-5-Dynamic-Equity`).
+
+It mathematically neutralizes survivorship bias and V-shaped crash whipsaws by implementing:
+*   **Layer-0 Dynamic Universe Screener:** Rotates capital quarterly into the Top 20 highest realized-volatility tech stocks.
+*   **Long-Only Pivot:** Hardcodes `long_only=True` to scale into cash during crashes instead of taking on dangerous short exposure in mean-reverting equity environments.
+*   **Dynamic Correlation Scalar:** Adjusts leverage mathematically based on the exact number of active assets to hit a strict 20% Target Volatility.
+
+**Performance (2015-2024):** 21.64% CAGR | -20.90% Max Drawdown | 0.98 Sharpe.
+*(See the [OCURE-5-Dynamic-Equity](./OCURE-5-Dynamic-Equity) directory for the full codebase and README).*
 
 ---
 
