@@ -146,19 +146,32 @@ class CarverSystem:
                 out[t] = np.dot(c, seg)
         return pd.Series(out, index=series.index)
 
-    def macro_regime_filter(self, xlu_close, spy_close):
+    def macro_regime_filter(self, btc_close, spy_close):
         """
-        Calculates a Risk-On / Risk-Off regime based on XLU outperformance.
-        Regime 1: Risk-On (Z-score < 0)
-        Regime 2: Risk-Off (Z-score >= 0)
+        Calculates a Risk-On / Risk-Off regime based on BTC/SPY 200MA Cross.
+        If BTC/SPY ratio drops below its 200-day moving average, force Risk-Off (total exit).
+        Regime 1: Risk-On (Ratio >= 200MA)
+        Regime 2: Risk-Off (Ratio < 200MA)
         """
-        ratio = xlu_close / spy_close
-        z_score = (ratio - ratio.rolling(self.ann_days).mean()) / ratio.rolling(self.ann_days).std()
+        # Strip timezones and reindex to avoid 100% NaN silent failure
+        safe_btc = btc_close.copy()
+        safe_spy = spy_close.copy()
         
-        z_smooth = self.causal_savgol(z_score, window=21, polyorder=2)
+        if safe_btc.index.tz is not None:
+            safe_btc.index = safe_btc.index.tz_localize(None)
+        if safe_spy.index.tz is not None:
+            safe_spy.index = safe_spy.index.tz_localize(None)
+            
+        safe_spy = safe_spy.reindex(safe_btc.index).ffill()
+        
+        safe_btc = safe_btc.replace(0, np.nan).ffill()
+        safe_spy = safe_spy.replace(0, np.nan).ffill()
+        
+        ratio = safe_btc / safe_spy
+        ma_200 = ratio.rolling(200, min_periods=100).mean()
         
         # 1 = Risk On, 2 = Risk Off
-        regime = pd.Series(np.where(z_smooth < 0, 1, 2), index=z_smooth.index)
+        regime = pd.Series(np.where(ratio < ma_200, 2, 1), index=ratio.index)
         return regime
 
     # --------------------------------------------------------------------------
@@ -229,7 +242,7 @@ class CarverSystem:
         w = w.replace([np.inf, -np.inf], np.nan).fillna(0.0)
         return w.clip(0.0, 1.0) if long_only else w.clip(-1.0, 1.0)
 
-    def generate_target_weights(self, close_prices, panel_prices=None, target_name=None, xlu_prices=None, spy_prices=None, weights=None):
+    def generate_target_weights(self, close_prices, panel_prices=None, target_name=None, btc_prices=None, spy_prices=None, weights=None):
         """
         Combines all layers and applies Beta Rotation to output final positions.
         If panel_prices and target_name are provided, it computes CS Momentum as well.
@@ -265,16 +278,16 @@ class CarverSystem:
         # 5. Position Sizing
         base_weight = self.position_from_forecast(attenuated_fc, vol, long_only=True)
         
-        # 6. Beta Rotations (Macro Regime Override)
-        if xlu_prices is not None and spy_prices is not None:
-            regime = self.macro_regime_filter(xlu_prices, spy_prices)
+        # 6. Macro Regime Override (BTC/SPY 200MA)
+        if btc_prices is not None and spy_prices is not None:
+            regime = self.macro_regime_filter(btc_prices, spy_prices)
             # Align indices
             aligned_base, aligned_regime = base_weight.align(regime, join='left')
-            aligned_regime = aligned_regime.fillna(1) # Default Risk On if no data
+            aligned_regime = aligned_regime.ffill().fillna(1) # Default Risk On if no data
             
-            # Example Override: 
-            # If Risk Off (2), cut position sizing in half (or rotate fully out in a multi-asset setup)
-            final_weight = pd.Series(np.where(aligned_regime == 2, aligned_base * 0.5, aligned_base), index=aligned_base.index)
+            # Hard Exit Override:
+            # If Risk Off (2), force position sizing to 0 (Total Exit to Cash)
+            final_weight = pd.Series(np.where(aligned_regime == 2, 0.0, aligned_base), index=aligned_base.index)
         else:
             final_weight = base_weight
             
