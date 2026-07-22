@@ -321,7 +321,6 @@ class CarverSystem:
         
         # 6. Macro Regime Override / Throttle
         if btc_prices is not None and spy_prices is not None:
-            # Check if continuous macro throttle multiplier is passed
             regime = self.macro_regime_filter(btc_prices, spy_prices)
             aligned_base, aligned_regime = base_weight.align(regime, join='left')
             aligned_regime = aligned_regime.ffill().fillna(1)
@@ -330,8 +329,6 @@ class CarverSystem:
         else:
             final_weight = base_weight
             
-        # 7. Carver Position Buffering
-        final_weight = self.apply_position_buffer(final_weight, buffer_threshold=0.05)
         return final_weight
 
     # --------------------------------------------------------------------------

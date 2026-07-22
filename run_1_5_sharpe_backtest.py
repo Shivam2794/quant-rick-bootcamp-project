@@ -15,10 +15,28 @@ from ocure5_universe_screener import compute_dynamic_universe
 from macro_throttle import MacroThrottle
 from carver_engine import build_carver_engine, ANN_DAYS
 
+def apply_portfolio_buffer(weights_df, buffer_threshold=0.008):
+    """Carver position inertia: trade only when weight delta exceeds 0.8% of capital."""
+    buffered = weights_df.copy()
+    for col in weights_df.columns:
+        series = weights_df[col]
+        curr_w = 0.0
+        buf_series = np.zeros(len(series))
+        for i in range(len(series)):
+            tw = series.iloc[i]
+            if np.isnan(tw):
+                curr_w = 0.0
+            else:
+                if abs(tw - curr_w) >= buffer_threshold:
+                    curr_w = tw
+            buf_series[i] = curr_w
+        buffered[col] = buf_series
+    return buffered
+
 def run_grand_backtest():
     print("==========================================================================")
-    print("   GRAND EPITOME: OPTIMIZED 4-SLEEVE 1.5+ SHARPE ENSEMBLE ENGINE")
-    print("   (100% REAL HISTORICAL DATA - ZERO SYNTHETIC SOURCES)")
+    print("   GRAND EPITOME: AUDITED MULTI-SLEEVE ENSEMBLE ENGINE")
+    print("   (100% REAL HISTORICAL DATA - PROPER BUFFER THRESHOLD)")
     print("==========================================================================")
 
     start_date = '2014-01-01'
@@ -56,7 +74,7 @@ def run_grand_backtest():
     throttle_engine = MacroThrottle(m_min=0.35, tau=1.0, theta_on=0.1, theta_off=-0.2, smooth_span=10)
     macro_multiplier = throttle_engine.compute_throttle(btc, spy, hyg, ief, tech_prices)
 
-    # 3. SLEEVE 1: OCURE-5 Equity Engine (Expanded Breadth TOP_N = 25)
+    # 3. SLEEVE 1: OCURE-5 Equity Engine (Expanded Breadth Top 25)
     print("\n3. Building Sleeve 1: Tech Equity Dual Engine (Expanded Breadth Top 25)...")
     TOP_N = 25
     membership = compute_dynamic_universe(tech_prices, top_n=TOP_N, lookback_days=90)
@@ -82,8 +100,11 @@ def run_grand_backtest():
         final_w = act_w.div(act_cnt, axis=0).mul(scalar, axis=0)
         final_w = final_w.mul(macro_multiplier, axis=0)
         
+        # Apply Carver Position Inertia Buffering with 0.8% single-stock threshold
+        buffered_w = apply_portfolio_buffer(final_w, buffer_threshold=0.008)
+        
         daily_ret = tech_prices.pct_change(fill_method=None).fillna(0.0)
-        exec_w = final_w.shift(1).fillna(0.0)
+        exec_w = buffered_w.shift(1).fillna(0.0)
         pnl = (exec_w * daily_ret).sum(axis=1)
         trn = exec_w.diff().abs().sum(axis=1)
         cost = trn * (3.25 / 10000.0)
@@ -100,7 +121,8 @@ def run_grand_backtest():
         crypto_weights[coin] = w_coin
 
     df_crypto_w = pd.DataFrame(crypto_weights)
-    exec_crypto_w = (df_crypto_w / len(crypto_symbols)).shift(1).fillna(0.0)
+    buffered_crypto_w = apply_portfolio_buffer(df_crypto_w / len(crypto_symbols), buffer_threshold=0.01)
+    exec_crypto_w = buffered_crypto_w.shift(1).fillna(0.0)
     pnl_crypto = (exec_crypto_w * crypto_ret).sum(axis=1)
     cost_crypto = exec_crypto_w.diff().abs().sum(axis=1) * (5.0 / 10000.0)
     ret_sleeve_2 = pnl_crypto - cost_crypto
@@ -114,7 +136,8 @@ def run_grand_backtest():
         etf_weights[etf_asset] = w_etf
 
     df_etf_w = pd.DataFrame(etf_weights)
-    exec_etf_w = (df_etf_w / len(etf_symbols)).shift(1).fillna(0.0)
+    buffered_etf_w = apply_portfolio_buffer(df_etf_w / len(etf_symbols), buffer_threshold=0.01)
+    exec_etf_w = buffered_etf_w.shift(1).fillna(0.0)
     pnl_etf = (exec_etf_w * etf_ret).sum(axis=1)
     cost_etf = exec_etf_w.diff().abs().sum(axis=1) * (2.0 / 10000.0)
     ret_sleeve_3 = pnl_etf - cost_etf
@@ -129,7 +152,6 @@ def run_grand_backtest():
     std60 = gs_ratio.rolling(60, min_periods=20).std().replace(0, np.nan)
     z_gs = (gs_ratio - ma60) / std60
     
-    # Filtered Z-score: enter only when |z| > 0.8
     z_filtered = np.where(np.abs(z_gs) > 0.8, z_gs, 0.0)
     z_filtered = pd.Series(z_filtered, index=z_gs.index)
 
@@ -155,7 +177,6 @@ def run_grand_backtest():
         'Sleeve_4_GoldSilverPair': ret_sleeve_4
     }).loc[eval_start:]
 
-    # Optimal risk allocations: 55% Equity, 25% Crypto, 10% Macro ETF, 10% Gold/Silver Pair
     sleeve_weights = pd.Series({
         'Sleeve_1_TechEquity': 0.55,
         'Sleeve_2_Crypto': 0.25,
@@ -165,8 +186,6 @@ def run_grand_backtest():
 
     raw_ensemble_ret = (sleeve_df * sleeve_weights).sum(axis=1)
 
-    # Soft CPPI Drawdown Governor:
-    # Target 16% Portfolio Volatility, scaling down if drawdown exceeds 6%
     eq_cum = (1.0 + raw_ensemble_ret).cumprod()
     peak = eq_cum.cummax()
     dd = (eq_cum / peak - 1.0)
@@ -205,7 +224,7 @@ def run_grand_backtest():
     plt.figure(figsize=(12, 6))
     plt.plot(equity_curve.index, equity_curve, color='navy', lw=2, label=f'Optimized Real Ensemble (Sharpe {sharpe_ratio:.2f}, MaxDD {max_dd*100:.1f}%)')
     plt.yscale('log')
-    plt.title('Grand Epitome: 4-Sleeve 100% Real Market Data Ensemble Equity Curve (Log Scale)')
+    plt.title('Grand Epitome: Multi-Sleeve 100% Real Market Data Ensemble Equity Curve (Log Scale)')
     plt.ylabel('Cumulative Return')
     plt.legend(loc='upper left')
     plt.grid(True, alpha=0.3)
