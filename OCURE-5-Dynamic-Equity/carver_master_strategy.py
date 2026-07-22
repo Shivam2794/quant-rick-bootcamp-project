@@ -256,11 +256,32 @@ class CarverSystem:
     # --------------------------------------------------------------------------
     # FINAL: DEMOCRATIC VOTING & POSITION SIZING
     # --------------------------------------------------------------------------
-    def position_from_forecast(self, forecast, vol, long_only=True):
-        """weight = (forecast / 10) * (vol_target / vol)."""
-        w = (forecast / self.fc_target) * (self.target_vol / vol)
+    def position_from_forecast(self, forecast, vol, long_only=True, current_drawdown=None):
+        """weight = (forecast / 10) * (vol_target / vol), with optional Soft CPPI drawdown scaling."""
+        target_v = self.target_vol
+        if current_drawdown is not None:
+            # Soft CPPI: target_vol = target_vol * max(0.3, 1 - 1.2 * (DD / 0.15))
+            dd_factor = np.maximum(0.3, 1.0 - 1.2 * (np.abs(current_drawdown) / 0.15))
+            target_v = target_v * dd_factor
+
+        w = (forecast / self.fc_target) * (target_v / vol)
         w = w.replace([np.inf, -np.inf], np.nan).fillna(0.0)
         return w.clip(0.0, 1.0) if long_only else w.clip(-1.0, 1.0)
+
+    def apply_position_buffer(self, target_weights, buffer_threshold=0.10):
+        """Carver position inertia: trade only if target weight changes by > buffer_threshold of max size."""
+        buffered = target_weights.copy()
+        curr_w = 0.0
+        for i in range(len(target_weights)):
+            tw = target_weights.iloc[i]
+            if np.isnan(tw):
+                buffered.iloc[i] = 0.0
+                curr_w = 0.0
+            else:
+                if abs(tw - curr_w) >= buffer_threshold:
+                    curr_w = tw
+                buffered.iloc[i] = curr_w
+        return buffered
 
     def generate_target_weights(self, close_prices, panel_prices=None, target_name=None, btc_prices=None, spy_prices=None, weights=None):
         """
@@ -298,19 +319,19 @@ class CarverSystem:
         # 5. Position Sizing
         base_weight = self.position_from_forecast(attenuated_fc, vol, long_only=True)
         
-        # 6. Macro Regime Override (BTC/SPY 200MA)
+        # 6. Macro Regime Override / Throttle
         if btc_prices is not None and spy_prices is not None:
+            # Check if continuous macro throttle multiplier is passed
             regime = self.macro_regime_filter(btc_prices, spy_prices)
-            # Align indices
             aligned_base, aligned_regime = base_weight.align(regime, join='left')
-            aligned_regime = aligned_regime.ffill().fillna(1) # Default Risk On if no data
+            aligned_regime = aligned_regime.ffill().fillna(1)
             
-            # Hard Exit Override:
-            # If Risk Off (2), force position sizing to 0 (Total Exit to Cash)
             final_weight = pd.Series(np.where(aligned_regime == 2, 0.0, aligned_base), index=aligned_base.index)
         else:
             final_weight = base_weight
             
+        # 7. Carver Position Buffering
+        final_weight = self.apply_position_buffer(final_weight, buffer_threshold=0.05)
         return final_weight
 
     # --------------------------------------------------------------------------
