@@ -8,7 +8,8 @@ ANN_DAYS   = 365      # Crypto trades 365 days a year
 FC_TARGET  = 10.0     
 FC_CAP     = 20.0     
 VOL_TARGET = 0.20     
-EWMAC_PAIRS = [(8, 32, 5.95), (16, 64, 4.10), (32, 128, 2.79), (64, 256, 1.91)]
+# EWMAC spans scaled to 365 calendar days
+EWMAC_PAIRS = [(11, 46), (23, 91), (46, 183), (91, 365)]
 
 # =========================================================
 # UTILITIES: VOLATILITY ESTIMATION (Prerequisite)
@@ -52,38 +53,49 @@ def vol_stack(close, ann_days=ANN_DAYS, short_span=30, anchor_years=5,
 def ewmac_forecast(close, sigma_p, pairs=EWMAC_PAIRS, fdm=1.13, cap=FC_CAP):
     """Captures primary trends across 4 timeframes."""
     subs = []
-    for f, s, sc in pairs:
+    for f, s in pairs:
         raw = (close.ewm(span=f, adjust=False).mean() - close.ewm(span=s, adjust=False).mean()) / sigma_p
+        sc = 10.0 / raw.abs().expanding(min_periods=ANN_DAYS).mean()
+        sc = sc.replace([np.inf, -np.inf], 1.0)
         subs.append((raw * sc).clip(-cap, cap))
     return (sum(subs) / len(subs) * fdm).clip(-cap, cap)
 
 # =========================================================
 # LAYER 2: BREAKOUT
 # =========================================================
-def breakout_single(close, n, sc, sm, cap=FC_CAP):
+def breakout_single(close, n, sm, cap=FC_CAP):
     mn, mx = close.rolling(n).min(), close.rolling(n).max()
     rng = mx - mn
     spir = ((close - mn) / rng).where(rng > 0, 0.5)
-    return ((spir - 0.5) * 40.0).ewm(span=sm, adjust=False).mean().mul(sc).clip(-cap, cap)
+    raw = ((spir - 0.5) * 40.0).ewm(span=sm, adjust=False).mean()
+    sc = 10.0 / raw.abs().expanding(min_periods=ANN_DAYS).mean()
+    sc = sc.replace([np.inf, -np.inf], 1.0)
+    return (raw * sc).clip(-cap, cap)
 
 def breakout_forecast(close, fdm=1.17, cap=FC_CAP):
     """Price channel breakout normalized by volatility."""
-    P = [(40, 0.70, 10), (80, 0.73, 20), (160, 0.74, 40), (320, 0.74, 80)]
-    subs = [breakout_single(close, n, sc, sm) for n, sc, sm in P]
+    # Scaled to 365 calendar days
+    P = [(57, 14), (114, 29), (228, 57), (456, 114)]
+    subs = [breakout_single(close, n, sm) for n, sm in P]
     return (sum(subs) / len(subs) * fdm).clip(-cap, cap)
 
 # =========================================================
 # LAYER 3: ACCELERATION (2nd Derivative)
 # =========================================================
-def ewmac_base(close, sigma_p, f, s, sc, cap=FC_CAP):
-    return ((close.ewm(span=f, adjust=False).mean()
-             - close.ewm(span=s, adjust=False).mean()) / sigma_p * sc).clip(-cap, cap)
+def ewmac_base(close, sigma_p, f, s):
+    return (close.ewm(span=f, adjust=False).mean() - close.ewm(span=s, adjust=False).mean()) / sigma_p
 
 def accel_forecast(close, sigma_p, fdm=1.55, cap=FC_CAP):
     """Measures the momentum of the EWMAC signals themselves."""
-    bases = [ewmac_base(close, sigma_p, f, s, sc) for f, s, sc in EWMAC_PAIRS]
-    AP, SC = [8, 16, 32, 64], [1.87, 1.90, 1.98, 2.05]
-    subs = [((bases[i] - bases[i].shift(AP[i])) * SC[i]).clip(-cap, cap) for i in range(4)]
+    bases = [ewmac_base(close, sigma_p, f, s) for f, s in EWMAC_PAIRS]
+    # Spans scaled to calendar days
+    AP = [11, 23, 46, 91]
+    subs = []
+    for i in range(4):
+        raw = bases[i] - bases[i].shift(AP[i])
+        sc = 10.0 / raw.abs().expanding(min_periods=ANN_DAYS).mean()
+        sc = sc.replace([np.inf, -np.inf], 1.0)
+        subs.append((raw * sc).clip(-cap, cap))
     return (sum(subs) / len(subs) * fdm).clip(-cap, cap)
 
 # =========================================================
@@ -91,17 +103,21 @@ def accel_forecast(close, sigma_p, fdm=1.55, cap=FC_CAP):
 # =========================================================
 def skew_forecast(ret, fdm=1.18, cap=FC_CAP):
     """Goes long assets with negative skew to exploit mean reversion in panic selling."""
-    P = [(60, 33.3, 15), (120, 37.2, 30), (240, 39.2, 60)]
+    # Scaled to calendar days
+    P = [(86, 21), (171, 43), (342, 86)]
     subs = []
-    for w, sc, sm in P:
+    for w, sm in P:
         g = ret.rolling(w, min_periods=w // 2).skew()
-        subs.append((-g).ewm(span=sm, adjust=False).mean().mul(sc).clip(-cap, cap))
+        raw = (-g).ewm(span=sm, adjust=False).mean()
+        sc = 10.0 / raw.abs().expanding(min_periods=ANN_DAYS).mean()
+        sc = sc.replace([np.inf, -np.inf], 1.0)
+        subs.append((raw * sc).clip(-cap, cap))
     return (sum(subs) / len(subs) * fdm).clip(-cap, cap)
 
 # =========================================================
 # LAYER 5: VOLATILITY ATTENUATION (Defense)
 # =========================================================
-def vol_attenuation(vol, window=1260, smooth=10):
+def vol_attenuation(vol, window=1825, smooth=14):
     """Reduces position size during extreme high-volatility regimes."""
     p = vol.rolling(window, min_periods=ANN_DAYS).rank(pct=True)
     p = p.ewm(span=smooth, adjust=False).mean()
@@ -118,20 +134,38 @@ def fdm_from_corr(w, C, fdm_max=2.5):
     return float(min(fdm_max, 1.0 / np.sqrt(var))) if var > 0 else 1.0
 
 def combine_forecasts(forecasts, weights, cap=FC_CAP):
-    """Blends the active forecasts using a correlation-aware multiplier."""
+    """Blends the active forecasts using Carver's Table 52 Fixed Correlation Matrix."""
     names = list(forecasts.keys())
     F = pd.concat([forecasts[n].rename(n) for n in names], axis=1)
     
     w = np.array([weights[n] for n in names], float)
     w = w / w.sum()
     
-    C = F.dropna().corr().reindex(index=names, columns=names).values
-    C = np.nan_to_num(C, nan=0.0)
-    np.fill_diagonal(C, 1.0)
+    # Table 52 Fixed Correlation Matrix
+    c_fixed = pd.DataFrame(1.0, index=names, columns=names)
+    fixed_corrs = {
+        ("EWMAC", "Breakout"): 0.55,
+        ("EWMAC", "Accel"): 0.25,
+        ("EWMAC", "Skew"): 0.00,
+        ("EWMAC", "CSmom"): 0.10,
+        ("Breakout", "Accel"): 0.15,
+        ("Breakout", "Skew"): 0.00,
+        ("Breakout", "CSmom"): 0.10,
+        ("Accel", "Skew"): 0.00,
+        ("Accel", "CSmom"): 0.10,
+        ("Skew", "CSmom"): 0.00,
+    }
+    
+    for (f1, f2), val in fixed_corrs.items():
+        if f1 in c_fixed.columns and f2 in c_fixed.columns:
+            c_fixed.loc[f1, f2] = val
+            c_fixed.loc[f2, f1] = val
+            
+    C = c_fixed.values
     
     fdm = fdm_from_corr(w, C)
-    combined = (F.mul(w, axis=1).sum(axis=1) * fdm).clip(-cap, cap)
-    return combined, fdm, F.dropna().corr()
+    combined = (F.mul(w, axis=1).sum(axis=1, skipna=False) * fdm).clip(-cap, cap)
+    return combined, fdm, c_fixed
 
 # =========================================================
 # LAYER 7: SIZING (Forecast -> Weight)
@@ -156,12 +190,12 @@ def cs_momentum_forecast(panel, target, horizons=(40, 80), fam_fdm=1.10, cap=FC_
     A  = PN.mean(axis=1)
     R  = PN[target] - A
     
-    subs, scs = [], []
+    subs = []
     for H in horizons:
         raw = (R - R.shift(H)) / H
         sm  = raw.ewm(span=max(2, H // 4), adjust=False).mean()
-        sc  = 10.0 / sm.abs().mean() if sm.abs().mean() > 0 else 1.0
-        scs.append(sc)
+        sc = 10.0 / sm.abs().expanding(min_periods=ANN_DAYS).mean()
+        sc = sc.replace([np.inf, -np.inf], 1.0)
         subs.append((sm * sc).clip(-cap, cap))
         
     cs = (sum(subs) / len(subs) * fam_fdm).clip(-cap, cap)

@@ -178,7 +178,7 @@ class CarverSystem:
     # LAYER 7: CROSS-SECTIONAL MOMENTUM
     # --------------------------------------------------------------------------
     def _normalised_price(self, ret, vol_ann):
-        safe_vol = vol_ann.replace(0.0, np.nan).bfill().fillna(1.0)
+        safe_vol = vol_ann.replace(0.0, np.nan).ffill().fillna(1.0)
         r_norm = ret / (safe_vol / np.sqrt(self.ann_days))
         r_norm = r_norm.replace([np.inf, -np.inf], np.nan).fillna(0.0)
         return 100.0 + r_norm.cumsum()
@@ -199,8 +199,9 @@ class CarverSystem:
         for h in [40, 80]:
             outperf = r.diff(1)
             f_raw = outperf.ewm(span=h, adjust=False).mean()
-            # Empirical scaling constant (roughly calibration scalar)
-            scalar = self.fc_target / f_raw.abs().mean()
+            # Expanding scaling constant to prevent lookahead bias
+            scalar = self.fc_target / f_raw.abs().expanding(min_periods=self.ann_days).mean()
+            scalar = scalar.replace([np.inf, -np.inf], 1.0)
             f_scaled = self._clip_fc(f_raw * scalar)
             fcs.append(f_scaled)
             
@@ -226,12 +227,31 @@ class CarverSystem:
         w_arr = np.array([weights[n] for n in names])
         w_arr = w_arr / w_arr.sum()
         
-        c = f_df.dropna().corr()
-        fdm = self.fdm_from_corr(w_arr, c)
+        # Table 52 Fixed Correlation Matrix
+        c_fixed = pd.DataFrame(1.0, index=names, columns=names)
+        fixed_corrs = {
+            ("ewmac", "breakout"): 0.55,
+            ("ewmac", "accel"): 0.25,
+            ("ewmac", "skew"): 0.00,
+            ("ewmac", "cs_mom"): 0.10,
+            ("breakout", "accel"): 0.15,
+            ("breakout", "skew"): 0.00,
+            ("breakout", "cs_mom"): 0.10,
+            ("accel", "skew"): 0.00,
+            ("accel", "cs_mom"): 0.10,
+            ("skew", "cs_mom"): 0.00,
+        }
+        
+        for (f1, f2), val in fixed_corrs.items():
+            if f1 in c_fixed.columns and f2 in c_fixed.columns:
+                c_fixed.loc[f1, f2] = val
+                c_fixed.loc[f2, f1] = val
+                
+        fdm = self.fdm_from_corr(w_arr, c_fixed)
         
         # sum(axis=1) will ignore NA by default, but we should just multiply and sum
-        combined = (f_df * w_arr).sum(axis=1) * fdm
-        return self._clip_fc(combined), fdm, c
+        combined = (f_df * w_arr).sum(axis=1, skipna=False) * fdm
+        return self._clip_fc(combined), fdm, c_fixed
 
     # --------------------------------------------------------------------------
     # FINAL: DEMOCRATIC VOTING & POSITION SIZING
